@@ -45,6 +45,24 @@ leases is deployed on Base Sepolia — see [DEPLOYMENTS.md](./DEPLOYMENTS.md).
   contractual financing instrument, not to a classification under IFRS 16 or
   ASC 842.
 
+## Known issues
+
+When something outside the lessee's control blocks payment, the counterparty
+can still move the lease towards default. `test/liveness/` reproduces each case:
+
+| Case | Lessee can pay? | Default / termination possible? |
+| --- | --- | --- |
+| Index oracle stale past `maxOracleStaleness` | No (`StaleOracle`) | Yes |
+| Index recovers; default declared in the same block | Not in time | Yes |
+| Lessor position held by an address blacklisted by the payment token | No | Yes, and the holder can induce it |
+| Payment token paused by its issuer | No | Yes |
+| Chain downtime across a due date | Not in time | Yes, in the first block after resuming |
+
+These are under discussion in the
+[Magicians thread](https://ethereum-magicians.org/t/erc-8348-financial-lease/29076)
+and will be addressed in the next spec revision. To run the liveness invariant
+in enforcing mode: `LIVENESS_STRICT=true forge test --match-contract LivenessInvariantTest`.
+
 ## Layout
 
 | Path | Contents |
@@ -55,7 +73,9 @@ leases is deployed on Base Sepolia — see [DEPLOYMENTS.md](./DEPLOYMENTS.md).
 | `src/IConversionOracle.sol` | Oracle interface used by the implementation |
 | `src/oracles/` | Adapters: Chainlink feed, composed feeds, attested (manually published) rate |
 | `src/MockUVAOracle.sol` | Test oracle |
-| `test/` | Unit, scenario, fuzz and invariant tests (76) |
+| `test/` | Unit, scenario, fuzz and invariant tests |
+| `test/liveness/` | Dependency-failure matrix and liveness invariant (documents known issues) |
+| `test/fork/` | Optional fork tests against live Chainlink feeds on Base (need `BASE_RPC_URL`) |
 | `script/DeployDemo.s.sol` | Base Sepolia demo deployment |
 
 ## Build and test
