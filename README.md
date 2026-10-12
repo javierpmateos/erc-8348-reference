@@ -15,7 +15,8 @@ leases is deployed on Base Sepolia — see [DEPLOYMENTS.md](./DEPLOYMENTS.md).
 
 ## What the standard covers
 
-- The lessor's position is an ERC-721 token (`tokenId == leaseId`), so it can be
+- The lessor's position is an ERC-721 token (`tokenId == leaseId`). Payments made
+  through the contract go to its current holder, so the position can be
   transferred, pledged or securitized with existing tooling.
 - The schedule is immutable and expressed in units of account; each payment is
   converted at the rate in force when it is made, with directional rounding that
@@ -30,6 +31,19 @@ leases is deployed on Base Sepolia — see [DEPLOYMENTS.md](./DEPLOYMENTS.md).
   observation, servicing data, appraisals) before relying on it.
 - Optional extensions: anchoring the lease to a registry entry on another chain,
   and binding it to an on-chain asset.
+
+## What it does not do
+
+- **It assumes on-chain settlement.** `pay()` moves an ERC-20 from the payer to
+  the holder of the lessor position. Anyone can call it, so a servicer that
+  collects off-chain can settle on the lessee's behalf, but the contract only
+  sees the on-chain payment.
+- **It does not create legal title.** The signed agreement stays off-chain,
+  bound by its hash. Whether a token transfer is a valid assignment depends on
+  the jurisdiction and the agreement.
+- **It is not an accounting classification.** "Financial lease" refers to the
+  contractual financing instrument, not to a classification under IFRS 16 or
+  ASC 842.
 
 ## Layout
 
@@ -66,4 +80,4 @@ or on the pull request. Bugs in this code: open an issue here.
 
 ## License
 
-[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/), like the ERC.
+[CC0 1.0](./LICENSE), like the ERC.

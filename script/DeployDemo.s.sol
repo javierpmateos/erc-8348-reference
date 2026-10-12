@@ -7,36 +7,36 @@ import {FinancialLease} from "../src/FinancialLease.sol";
 import {AttestedConversionOracle} from "../src/oracles/AttestedConversionOracle.sol";
 import {MockStablecoin} from "./mocks/MockStablecoin.sol";
 
-/// @title DeployDemo — deploy de demostracion de ERC-8348 en Base Sepolia
-/// @notice Despliega tARS + oraculo UVA atestado + FinancialLease y origina
-///         tres leasings de ejemplo (al dia / tasa fija / en mora).
-/// @dev El script NO maneja claves: firma Foundry con el keystore, via
-///      `--account <nombre> --sender <address>` por linea de comando. El
-///      sender es el deployer (= lessor, owner y atestador del oraculo).
+/// @title DeployDemo — ERC-8348 demo deployment on Base Sepolia
+/// @notice Deploys tARS + an attested UVA oracle + FinancialLease and originates
+///         three example leases (current / fixed rate / in arrears).
+/// @dev The script does NOT handle keys: Foundry signs with the keystore, via
+///      `--account <name> --sender <address>` on the command line. The
+///      sender is the deployer (= lessor, owner and attester of the oracle).
 ///
-///      Variables de entorno:
-///        LESSEE       address del tomador de los tres leasings
-///        UVA_RATE     valor del UVA en ARS tal como lo publica el BCRA,
-///                     en decimal: "1634.52" o "1634,52" (hasta 6
-///                     decimales, SIN separador de miles)
+///      Environment variables:
+///        LESSEE       address of the lessee of all three leases
+///        UVA_RATE     UVA value in ARS as published by the BCRA,
+///                     in decimal: "1634.52" or "1634,52" (up to 6
+///                     decimals, NO thousands separator)
 ///
-///      Convencion de escalas (la misma de test/Scenarios.t.sol):
-///        - unidades de cuenta: 18 decimales (1 UVA = 1e18)
-///        - rate del oraculo: payment asset por unidad, en decimales del
-///          asset (1634.52 ARS/UVA con tARS de 6 decimales = 1634.52e6)
-///        - con oracle == address(0) el rate es 1e18 fijo, o sea que las
-///          unidades SON base units del asset (caso B: 6 decimales)
+///      Scale conventions (the same as test/Scenarios.t.sol):
+///        - units of account: 18 decimals (1 UVA = 1e18)
+///        - oracle rate: payment asset per unit, in the asset's
+///          decimals (1634.52 ARS/UVA with 6-decimal tARS = 1634.52e6)
+///        - with oracle == address(0) the rate is a fixed 1e18, i.e. the
+///          units ARE base units of the asset (case B: 6 decimals)
 contract DeployDemo is Script {
     uint256 internal constant BASE_SEPOLIA = 84532;
     uint64 internal constant PERIOD = 30 days;
     uint64 internal constant MAX_ORACLE_STALENESS = 30 days;
     uint64 internal constant TERMINATION_DELAY = 30 days;
 
-    // A) 36 x 2.500 UVA = 90.000 UVA (equipo industrial de gama media)
+    // A) 36 x 2,500 UVA = 90,000 UVA (mid-range industrial equipment)
     uint256 internal constant A_INSTALLMENT_UVA = 2_500e18;
-    // B) 12 x 12.500.000 tARS, denominacion fija (unidades = base units)
+    // B) 12 x 12,500,000 tARS, fixed denomination (units = base units)
     uint256 internal constant B_INSTALLMENT_ARS = 12_500_000e6;
-    // C) 24 x 3.000 UVA = 72.000 UVA
+    // C) 24 x 3,000 UVA = 72,000 UVA
     uint256 internal constant C_INSTALLMENT_UVA = 3_000e18;
     uint16 internal constant C_PENALTY_BPS_PER_DAY = 10;
 
@@ -50,7 +50,7 @@ contract DeployDemo is Script {
     function run() external {
         require(block.chainid == BASE_SEPOLIA, "DeployDemo: solo Base Sepolia (84532)");
 
-        // --sender: con vm.startBroadcast() sin argumentos, es quien firma
+        // --sender: with vm.startBroadcast() and no arguments, this is the signer
         address deployer = msg.sender;
         address lesseeAddr = vm.envAddress("LESSEE");
         require(lesseeAddr != address(0), "DeployDemo: LESSEE es address(0)");
@@ -65,7 +65,7 @@ contract DeployDemo is Script {
         oracle.attest(uvaRate);
         FinancialLease lease = new FinancialLease();
 
-        // A) Al dia: primera cuota a 30 dias del deploy, opcion = 1 cuota
+        // A) Current: first installment 30 days after deploy, option = 1 installment
         uint256 idA = lease.createLease(
             _params(
                 lesseeAddr,
@@ -81,7 +81,7 @@ contract DeployDemo is Script {
             )
         );
 
-        // B) Tasa fija: mismo bien, sin oraculo (conversion identidad)
+        // B) Fixed rate: same asset, no oracle (identity conversion)
         uint256 idB = lease.createLease(
             _params(
                 lesseeAddr,
@@ -97,8 +97,8 @@ contract DeployDemo is Script {
             )
         );
 
-        // C) En mora: el cronograma arranco hace 65 dias, asi que las
-        //    cuotas 0 y 1 vencieron hace 35 y 5 dias. Sin pagos.
+        // C) In arrears: the schedule started 65 days ago, so
+        //    installments 0 and 1 fell due 35 and 5 days ago. No payments.
         uint256 idC = lease.createLease(
             _params(
                 lesseeAddr,
@@ -123,9 +123,9 @@ contract DeployDemo is Script {
         console2.log("MockStablecoin (tARS):       ", address(tars));
         console2.log("AttestedConversionOracle:    ", address(oracle));
         console2.log("FinancialLease:              ", address(lease));
-        console2.log("leaseId A (al dia, UVA):     ", idA);
-        console2.log("leaseId B (tasa fija, ARS):  ", idB);
-        console2.log("leaseId C (en mora, UVA):    ", idC);
+        console2.log("leaseId A (current, UVA):    ", idA);
+        console2.log("leaseId B (fixed rate, ARS): ", idB);
+        console2.log("leaseId C (in arrears, UVA): ", idC);
 
         _logLease(lease, "A", idA);
         _logLease(lease, "B", idB);
@@ -165,7 +165,7 @@ contract DeployDemo is Script {
             unitAmounts: unitAmounts,
             purchasePriceUnits: purchasePriceUnits,
             penaltyBpsPerDay: penaltyBpsPerDay,
-            defaultDeclarer: address(0), // sin override: sigue a ownerOf
+            defaultDeclarer: address(0), // no override: follows ownerOf
             terminationDelay: TERMINATION_DELAY,
             anchorChainId: 0,
             anchorRegistry: address(0),
@@ -176,7 +176,7 @@ contract DeployDemo is Script {
         });
     }
 
-    /// @dev Solo lectura (post stopBroadcast): no genera transacciones.
+    /// @dev Read-only (after stopBroadcast): sends no transactions.
     function _logLease(FinancialLease lease, string memory label, uint256 id) internal view {
         (uint256 nextAssets, uint64 nextDue) = lease.nextPayment(id);
         console2.log(string.concat("--- lease ", label, " ---"));
@@ -188,10 +188,10 @@ contract DeployDemo is Script {
         console2.log("  nextPayment dueDate:          ", uint256(nextDue));
     }
 
-    /// @dev "1634.52" / "1634,52" -> 1634520000 (6 decimales, los de tARS).
-    ///      Un solo separador decimal y nada de separador de miles; el piso
-    ///      de 100 ARS atrapa justamente ese error ("1,634" leido como
-    ///      1.634) y un valor pasado en la escala equivocada.
+    /// @dev "1634.52" / "1634,52" -> 1634520000 (6 decimals, those of tARS).
+    ///      A single decimal separator and no thousands separator; the floor
+    ///      of 100 ARS catches exactly that mistake ("1,634" read as
+    ///      1.634) and a value passed in the wrong scale.
     function _parseRate(string memory s) internal pure returns (uint256 r) {
         bytes memory b = bytes(s);
         uint256 fracDigits;
@@ -199,16 +199,16 @@ contract DeployDemo is Script {
         for (uint256 i = 0; i < b.length; i++) {
             bytes1 c = b[i];
             if (c == "." || c == ",") {
-                require(!seenSeparator, "UVA_RATE: mas de un separador decimal");
+                require(!seenSeparator, "UVA_RATE: more than one decimal separator");
                 seenSeparator = true;
                 continue;
             }
-            require(c >= "0" && c <= "9", "UVA_RATE: caracter invalido");
+            require(c >= "0" && c <= "9", "UVA_RATE: invalid character");
             r = r * 10 + (uint8(c) - 48);
             if (seenSeparator) fracDigits++;
         }
-        require(fracDigits <= 6, "UVA_RATE: mas de 6 decimales");
+        require(fracDigits <= 6, "UVA_RATE: more than 6 decimals");
         r *= 10 ** (6 - fracDigits);
-        require(r >= 100e6, "UVA_RATE: implausible (< 100 ARS); formato esperado 1634.52");
+        require(r >= 100e6, "UVA_RATE: implausible (< 100 ARS); expected format 1634.52");
     }
 }

@@ -119,8 +119,9 @@ cast call $LEASE "inputFreshness(uint256,bytes32)(uint64,uint64,uint64)" \
 
 ### Mint tARS, approve and pay
 
-`pay()` is permissionless — any address can pay any lease, the funds go to the
-lessor — so you can use your own account even though you are not the lessee.
+`pay()` is permissionless — any address can pay any lease, and the funds go to
+the current holder of the lessor position (the owner of the lease NFT) — so you
+can use your own account even though you are not the lessee.
 You need a little Base Sepolia ETH for gas. The commands sign with a Foundry
 keystore account, so no key ever touches your shell history or a file in the
 repo. Create one once (it prompts for the private key and a password); if you

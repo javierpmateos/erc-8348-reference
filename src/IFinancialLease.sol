@@ -2,14 +2,14 @@
 // src/IFinancialLease.sol
 pragma solidity ^0.8.24;
 
-// Identificadores base de servicing input, en un dominio bytes32 separado
-// (keccak256 de un string namespaced) en vez de un enum cerrado. Declarados
-// a nivel de archivo porque las interfaces de Solidity no pueden declarar
-// variables (ni siquiera `constant`): viven junto a IFinancialLease para
-// que el conjunto base sea parte del estándar y no se fragmente entre
-// deployments. Implementaciones pueden definir inputs propios con su
-// propio namespace (ej. keccak256("miorg.input.loQueSea")) sin tocar esta
-// interfaz.
+// Base servicing-input identifiers, in a separate bytes32 domain
+// (keccak256 of a namespaced string) instead of a closed enum. Declared
+// at file level because Solidity interfaces cannot declare
+// variables (not even `constant`): they live next to IFinancialLease so
+// that the base set is part of the standard and does not fragment across
+// deployments. Implementations may define their own inputs under their
+// own namespace (e.g. keccak256("myorg.input.whatever")) without touching this
+// interface.
 bytes32 constant INPUT_INDEX_OBSERVATION = keccak256("erc8348.input.indexObservation");
 bytes32 constant INPUT_COLLECTIONS = keccak256("erc8348.input.collections");
 bytes32 constant INPUT_ARREARS_RECORD = keccak256("erc8348.input.arrearsRecord");
@@ -17,13 +17,13 @@ bytes32 constant INPUT_INSURANCE_STATUS = keccak256("erc8348.input.insuranceStat
 bytes32 constant INPUT_ASSET_CONDITION = keccak256("erc8348.input.assetCondition");
 bytes32 constant INPUT_RESIDUAL_APPRAISAL = keccak256("erc8348.input.residualAppraisal");
 
-// Causales de terminación anticipada (fix S6-01), mismo criterio de
-// dominio bytes32 separado que los INPUT_* de arriba. Solo estas dos
-// viven en el núcleo: son transiciones contractuales bilaterales o
-// gatilladas por incumplimiento, aplicables a cualquier leasing
-// financiero sin importar la jurisdicción o el tipo de activo. Otras
-// causales (ej. pérdida total del bien) son un hecho sobre el activo,
-// no una transición contractual — quedan a extensión con su propio
+// Early-termination causes (fix S6-01), same separate bytes32 domain
+// approach as the INPUT_* above. Only these two
+// live in the core: they are bilateral contractual transitions or
+// transitions triggered by breach, applicable to any financial
+// lease regardless of jurisdiction or asset type. Other
+// causes (e.g. total loss of the asset) are a fact about the asset,
+// not a contractual transition — they are left to an extension with its own
 // namespace.
 bytes32 constant TERMINATION_MUTUAL_AGREEMENT = keccak256("erc8348.termination.mutualAgreement");
 bytes32 constant TERMINATION_DEFAULT = keccak256("erc8348.termination.default");
@@ -68,10 +68,10 @@ interface IFinancialLease {
     function arrears(uint256 leaseId) external view returns (uint256);
     function status(uint256 leaseId) external view returns (LeaseStatus);
 
-    // ─── Servicing (reporte paralelo, no enforcado) ─────────────
-    // `input` es un identificador bytes32 (ver constantes INPUT_* de este
-    // archivo). El estándar solo EXPONE observedAt/reportedAt/maxStaleness;
-    // el consumidor decide qué hacer con la divergencia entre ambos.
+    // ─── Servicing (parallel reporting, not enforced) ───────────
+    // `input` is a bytes32 identifier (see the INPUT_* constants in this
+    // file). The standard only EXPOSES observedAt/reportedAt/maxStaleness;
+    // the consumer decides what to do with any divergence between them.
     function inputFreshness(uint256 leaseId, bytes32 input)
         external
         view

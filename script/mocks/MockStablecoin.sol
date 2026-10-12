@@ -9,9 +9,9 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 ///         `mint` is PUBLIC and unrestricted: anyone can mint any amount to
 ///         any address, so this token has no value and MUST NOT be deployed
 ///         to, or relied upon in, any production network.
-/// @dev 6 decimales, como un ARS digital. Sin owner, sin cap, sin pausas:
-///      existe solo para que cualquier dev pueda conseguir saldo y probar
-///      pay() contra los leasings de demostracion.
+/// @dev 6 decimals, like a digital ARS. No owner, no cap, no pauses:
+///      it exists only so that any dev can get a balance and test
+///      pay() against the demo leases.
 contract MockStablecoin is ERC20 {
     constructor() ERC20("Test ARS Stablecoin", "tARS") {}
 
