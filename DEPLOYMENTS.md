@@ -49,6 +49,12 @@ It is worth watching:
 - `inputFreshness(leaseId, INPUT_INDEX_OBSERVATION)` is how a consumer detects
   it: stale when `block.timestamp - observedAt > maxStaleness`;
 - lease 2 (no oracle) is never affected.
+- **Known issue:** while the index is stale, arrears and penalties keep
+  accruing and the lessor can still call `declareDefault` and, after the
+  timelock, `terminateForDefault`, even though the lessee cannot pay. This is
+  under discussion in the
+  [Magicians thread](https://ethereum-magicians.org/t/erc-8348-financial-lease/29076)
+  and will be addressed in the next spec revision.
 
 Only the attester can fix it (see [Re-attesting the UVA](#re-attesting-the-uva)).
 
