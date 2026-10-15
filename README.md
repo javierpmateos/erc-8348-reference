@@ -1,12 +1,13 @@
 # ERC-8348 Financial Lease — reference implementation
 
-Reference implementation of [ERC-8348](https://github.com/ethereum/ERCs/pull/1907),
+Reference implementation of [ERC-8348](https://ercs.ethereum.org/ERCS/erc-8348),
 a jurisdiction-neutral interface for tokenized financial leases whose schedules
 are denominated in a unit of account (an inflation index such as the UVA, UF or
 IPCA, or a plain currency) and settled in an ERC-20 payment asset.
 
-> **Status: Draft.** The ERC is under review in
-> [ethereum/ERCs#1907](https://github.com/ethereum/ERCs/pull/1907) and the
+> **Status: Draft.** ERC-8348 was merged into
+> [ethereum/ERCs](https://github.com/ethereum/ERCs/blob/master/ERCS/erc-8348.md)
+> as a Draft ([#1907](https://github.com/ethereum/ERCs/pull/1907)) and the
 > interface may still change. This code is for study and testnet use; it has not
 > been externally audited. Do not use it with real funds.
 

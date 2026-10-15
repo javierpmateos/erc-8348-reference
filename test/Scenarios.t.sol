@@ -171,7 +171,7 @@ contract ScenariosTest is Test {
         // I1: settledUnits <= scheduleTotalUnits. outstandingUnits() is
         // computed as total - settled: if settled > total, the subtraction
         // would have reverted on underflow. We also check the range.
-        assertLe(outstanding, total, "I1: outstandingUnits excede scheduleTotalUnits");
+        assertLe(outstanding, total, "I1: outstandingUnits exceeds scheduleTotalUnits");
 
         // I2: outstandingUnits == scheduleTotalUnits - settledUnits is
         // true by construction in the contract (it is its literal
@@ -477,7 +477,7 @@ contract ScenariosTest is Test {
 
     function test_Scenario3_SecuritizationTransferMidLife() public {
         address lessorOriginal = makeAddr("s3_lessorOriginal");
-        address fondoComprador = makeAddr("s3_fondoComprador");
+        address buyerFund = makeAddr("s3_buyerFund");
         address tomador = makeAddr("s3_tomador");
 
         MockStable stable = new MockStable(6);
@@ -515,17 +515,17 @@ contract ScenariosTest is Test {
                 "installments 1-8: funds must go to lessorOriginal"
             );
         }
-        assertEq(stable.balanceOf(fondoComprador), 0, "fondoComprador must not have funds yet");
+        assertEq(stable.balanceOf(buyerFund), 0, "buyerFund must not have funds yet");
 
         uint256 outstandingBeforeTransfer = lease.outstandingUnits(id);
         IFinancialLease.LeaseStatus statusBeforeTransfer = lease.status(id);
         (uint256 nextAssetsBefore, uint64 nextDueBefore) = lease.nextPayment(id);
 
         vm.prank(lessorOriginal);
-        lease.transferFrom(lessorOriginal, fondoComprador, id);
+        lease.transferFrom(lessorOriginal, buyerFund, id);
         _assertInvariants(id);
 
-        assertEq(lease.lessor(id), fondoComprador, "the NFT must pass to fondoComprador");
+        assertEq(lease.lessor(id), buyerFund, "the NFT must pass to buyerFund");
         assertEq(
             lease.outstandingUnits(id), outstandingBeforeTransfer, "ASSERT: the assignment must not alter outstanding"
         );
@@ -538,15 +538,15 @@ contract ScenariosTest is Test {
             vm.warp(uint256(dueDates[i]));
             oracle_.set(1e18);
             (uint256 assetsDue,) = lease.nextPayment(id);
-            uint256 balBeforeNew = stable.balanceOf(fondoComprador);
+            uint256 balBeforeNew = stable.balanceOf(buyerFund);
             uint256 balBeforeOld = stable.balanceOf(lessorOriginal);
             vm.prank(tomador);
             lease.pay(id, assetsDue);
             _assertInvariants(id);
             assertEq(
-                stable.balanceOf(fondoComprador) - balBeforeNew,
+                stable.balanceOf(buyerFund) - balBeforeNew,
                 assetsDue,
-                "installments 9-24: funds must go to fondoComprador"
+                "installments 9-24: funds must go to buyerFund"
             );
             assertEq(stable.balanceOf(lessorOriginal), balBeforeOld, "lessorOriginal must not receive anything else");
         }

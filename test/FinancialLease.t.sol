@@ -1196,7 +1196,7 @@ contract FinancialLeaseTest is Test {
         // change anything observable; what proves that the SECOND counts is
         // the event emitted with the new reason.
         vm.expectEmit(true, true, false, false);
-        emit FinancialLease.TerminationRecorded(id, customReason);
+        emit IFinancialLease.TerminationRecorded(id, customReason);
         vm.prank(lessor);
         lease.acceptTermination(id);
 
@@ -1623,7 +1623,7 @@ contract FinancialLeaseTest is Test {
     ///      difference of grosses instead of the floor of what was applied). After the
     ///      fix, besides not reverting, splitting must not change
     ///      arrears() (MUST NOT of S3-01).
-    function test_T70_regressionUnderflowPorFraccionarPago() public {
+    function test_T70_regressionUnderflowFromSplitPayment() public {
         (uint64[] memory dueDatesA, uint256[] memory unitAmountsA) = _schedule(12, 1e23);
         uint256 idA = _createLease(address(oracle), 0, dueDatesA, unitAmountsA);
         (uint64[] memory dueDatesB, uint256[] memory unitAmountsB) = _schedule(12, 1e23);

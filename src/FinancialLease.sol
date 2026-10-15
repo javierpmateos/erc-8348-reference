@@ -121,12 +121,10 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
     ///      implementation resolves the defaultDeclarer role (fix S4-01).
     event DefaultDeclarerAssigned(uint256 indexed leaseId, address indexed oldDeclarer, address indexed newDeclarer);
 
-    /// @dev Not part of IFinancialLease: the interface only requires
-    ///      LeaseTerminated(leaseId, finalStatus) — already declared there and
-    ///      reused for the Terminated status. These two events add
-    ///      the cause and the proposer, which LeaseTerminated does not carry.
+    /// @dev Not part of IFinancialLease: records who proposed a mutual
+    ///      termination. The reason itself is reported through
+    ///      TerminationRecorded, declared in IFinancialLease.
     event TerminationProposed(uint256 indexed leaseId, address indexed proposedBy, bytes32 reason);
-    event TerminationRecorded(uint256 indexed leaseId, bytes32 indexed reason);
 
     constructor() ERC721("Financial Lease Position", "LEASE") {}
 

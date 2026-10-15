@@ -68,15 +68,18 @@ interface IFinancialLease {
     function arrears(uint256 leaseId) external view returns (uint256);
     function status(uint256 leaseId) external view returns (LeaseStatus);
 
-    // ─── Servicing (parallel reporting, not enforced) ───────────
+    // ─── Input freshness (parallel reporting, not enforced) ─────
     // `input` is a bytes32 identifier (see the INPUT_* constants in this
     // file). The standard only EXPOSES observedAt/reportedAt/maxStaleness;
     // the consumer decides what to do with any divergence between them.
+    // Recording a servicing attestation is an implementation-defined entry
+    // point (FinancialLease.updateServicing in this implementation); the
+    // standard constrains its effects, not its signature, so it is not part
+    // of this interface or of its ERC-165 identifier.
     function inputFreshness(uint256 leaseId, bytes32 input)
         external
         view
         returns (uint64 observedAt, uint64 reportedAt, uint64 maxStaleness);
-    function updateServicing(uint256 leaseId, bytes32 input, uint64 observedAt) external;
 
     // ─── Actions ────────────────────────────────────────────────
     function pay(uint256 leaseId, uint256 assets) external;
@@ -105,5 +108,9 @@ interface IFinancialLease {
     event PurchaseOptionExercised(uint256 indexed leaseId, uint256 priceInAssets);
     event LeaseTerminated(uint256 indexed leaseId, LeaseStatus finalStatus);
     event LesseeAssigned(uint256 indexed leaseId, address indexed oldLessee, address indexed newLessee);
+    /// @dev Emitted alongside LeaseTerminated when a lease reaches Terminated,
+    ///      carrying the domain-separated reason (TERMINATION_* or an
+    ///      implementation-defined one).
+    event TerminationRecorded(uint256 indexed leaseId, bytes32 indexed reason);
     event ServicingUpdated(uint256 indexed leaseId, bytes32 indexed input, uint64 observedAt, uint64 reportedAt);
 }

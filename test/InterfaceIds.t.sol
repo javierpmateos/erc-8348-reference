@@ -12,7 +12,7 @@ import {IFinancialLeaseAssetBound} from "../src/IFinancialLeaseAssetBound.sol";
 ///      the resulting interfaceId changes and this test fails
 ///      instead of silently letting a broken ERC-165 detection through.
 contract InterfaceIdsTest is Test {
-    bytes4 constant IFINANCIAL_LEASE_ID = 0xe3e0ac48;
+    bytes4 constant IFINANCIAL_LEASE_ID = 0xf6b0f493;
     bytes4 constant IFINANCIAL_LEASE_ANCHORED_ID = 0x09fce36a;
     bytes4 constant IFINANCIAL_LEASE_ASSET_BOUND_ID = 0xf71550a8;
 

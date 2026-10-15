@@ -32,6 +32,12 @@ Scales: units of account have 18 decimals (1 UVA = `1e18`); tARS has 6
 decimals; the oracle rate is tARS per UVA in tARS decimals (2,150.53 ARS/UVA =
 `2150530000`). Lease B has no oracle, so its units *are* tARS base units.
 
+**Interface ID.** These contracts were deployed before the core interface was
+revised (`inputFreshness` moved into the core, `updateServicing` became
+implementation-defined). They answer `supportsInterface` for the previous core
+ID `0xe3e0ac48`, not for the current `0xf6b0f493`. The next redeploy will fix
+this; every function used below behaves the same.
+
 ### ⚠️ The UVA oracle goes stale after 30 days — on purpose
 
 The UVA has no on-chain feed, so the demo uses `AttestedConversionOracle`: the
