@@ -171,7 +171,7 @@ contract FinancialLeaseBase is ERC721, ReentrancyGuard, IFinancialLease, IFinanc
         uint64[] servicingMaxStaleness;
     }
 
-    function createLease(CreateLeaseParams calldata p) external returns (uint256 leaseId) {
+    function createLease(CreateLeaseParams calldata p) public virtual returns (uint256 leaseId) {
         require(p.dueDates.length == p.unitAmounts.length && p.dueDates.length > 0, "bad schedule");
         for (uint256 i = 1; i < p.dueDates.length; i++) {
             require(p.dueDates[i] > p.dueDates[i - 1], "unsorted schedule");

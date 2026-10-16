@@ -36,12 +36,20 @@ contract VariantA is FinancialLeaseBase {
     }
 }
 
-/// @title Variant B — A + grace period after the index recovers
+/// @title Variant B (unbounded) — A + grace period after the index recovers
 /// @dev Requires a HistoricalAttestedOracle. Adverse transitions also revert
 ///      unless the index was continuously fresh during the last GRACE seconds,
 ///      so a recovery cannot be followed by a default in the same block.
-contract VariantB is VariantA {
-    uint64 public constant GRACE = 3 days;
+///      Recovery is measured from the on-chain recording time of each
+///      observation (HistoricalAttestedOracle stores block.timestamp), not from
+///      a time claimed by the attester. This version does not bound GRACE; it
+///      exists to show why the bound in VariantB is needed (X-B3).
+contract VariantBUnbounded is VariantA {
+    uint64 public immutable GRACE;
+
+    constructor(uint64 grace) {
+        GRACE = grace;
+    }
 
     function _guard(uint256 leaseId) internal view override {
         super._guard(leaseId);
@@ -50,6 +58,23 @@ contract VariantB is VariantA {
         uint64 nowTs = uint64(block.timestamp);
         bool ok = HistoricalAttestedOracle(l.oracle).continuouslyFresh(nowTs - GRACE, nowTs, l.maxOracleStaleness);
         if (!ok) revert PaymentPathUnavailable();
+    }
+}
+
+/// @title Variant B — bounded recovery grace
+/// @dev Same rule as VariantBUnbounded, with GRACE = 3 days and the bound
+///      0 < GRACE < maxOracleStaleness enforced at origination. With the bound,
+///      every recovery is followed by a fresh window long enough for the grace
+///      period to elapse, so late attestations delay a genuine default by at
+///      most GRACE after each recovery instead of blocking it (X-B1, X-B2).
+contract VariantB is VariantBUnbounded(3 days) {
+    error GraceNotBelowStaleness();
+
+    function createLease(CreateLeaseParams calldata p) public override returns (uint256 leaseId) {
+        if (p.oracle != address(0) && (p.maxStaleness == 0 || GRACE >= p.maxStaleness)) {
+            revert GraceNotBelowStaleness();
+        }
+        return super.createLease(p);
     }
 }
 

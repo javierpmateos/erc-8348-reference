@@ -6,7 +6,7 @@ import {IFinancialLease} from "../../src/IFinancialLease.sol";
 import {MockUVAOracle} from "../../src/MockUVAOracle.sol";
 import {HostileToken} from "../../test/mocks/HostileTokens.sol";
 import {FinancialLeaseBase} from "../liveness-variants/FinancialLeaseBase.sol";
-import {VariantA, VariantB, VariantC, VariantD} from "../liveness-variants/Variants.sol";
+import {VariantA, VariantB, VariantBUnbounded, VariantC, VariantD} from "../liveness-variants/Variants.sol";
 import {HistoricalAttestedOracle} from "../liveness-variants/HistoricalAttestedOracle.sol";
 
 /// @title Common battery for the liveness variants — EXPERIMENT ONLY
@@ -174,18 +174,63 @@ contract BatteryB is Battery {
         HistoricalAttestedOracle(oracle).attest(1e18);
     }
 
-    /// X-B1: a lessor-hostile edge. If attestations keep arriving late, the
-    ///       grace window keeps restarting and a genuine default is delayed.
-    function test_XB1_lateAttestationsDelayGenuineDefault() public {
-        // index refreshed every 8 days (> 7-day tolerance): never continuously fresh
-        uint256 t = now_;
-        while (t < uint256(due0) + 40 days) {
-            t += 8 days;
-            _warp(t);
+    /// @dev Index attested every 8 days against a 7-day tolerance: it is
+    ///      stale for one day before each attestation, then fresh for 7 days.
+    function _lateAttestationsUntil(uint256 until) internal returns (uint256 last) {
+        last = now_;
+        while (last < until) {
+            last += 8 days;
+            _warp(last);
             _refresh();
         }
-        bool ok = _tryDefault();
-        console2.log("X-B1 genuine default possible with late attestations:", ok);
+    }
+
+    function _defaultPossibleAt(uint256 t) internal returns (bool ok) {
+        uint256 snap = vm.snapshotState();
+        _warp(t);
+        ok = _tryDefault();
+        vm.revertToState(snap);
+    }
+
+    /// X-B1: with late attestations, default is delayed by at most GRACE after
+    ///       each recovery; it is not blocked indefinitely.
+    function test_XB1_lateAttestationsDelayDefaultByAtMostGrace() public {
+        uint256 r = _lateAttestationsUntil(uint256(due0) + 40 days);
+        uint256 g = VariantB(address(lease)).GRACE();
+        assertFalse(_defaultPossibleAt(r), "blocked in the recovery block");
+        assertFalse(_defaultPossibleAt(r + g - 1), "blocked until the grace period has elapsed");
+        assertTrue(_defaultPossibleAt(r + g), "available once the grace period has elapsed");
+    }
+
+    /// X-B2: the bound 0 < GRACE < maxOracleStaleness is enforced at origination.
+    function test_XB2_graceMustBeShorterThanStaleness() public {
+        uint64[] memory dd = new uint64[](1);
+        dd[0] = due0;
+        uint256[] memory ua = new uint256[](1);
+        ua[0] = 100 * UNIT;
+        FinancialLeaseBase.CreateLeaseParams memory p = FinancialLeaseBase.CreateLeaseParams({
+            lessee: lessee, jurisdiction: bytes2("AR"), governingLaw: "test", agreementHash: bytes32(0),
+            assetRef: "asset://variant", paymentAsset: address(token), denomSymbol: "UVA", oracle: oracle,
+            maxStaleness: 3 days, dueDates: dd, unitAmounts: ua,
+            purchasePriceUnits: 1 * UNIT, penaltyBpsPerDay: 10, defaultDeclarer: address(0),
+            terminationDelay: 7 days, anchorChainId: 0, anchorRegistry: address(0), anchorId: bytes32(0),
+            servicer: address(0), servicingInputs: new bytes32[](0), servicingMaxStaleness: new uint64[](0)
+        });
+        vm.prank(lessor);
+        vm.expectRevert(VariantB.GraceNotBelowStaleness.selector);
+        lease.createLease(p); // GRACE (3 days) == maxStaleness: rejected
+    }
+
+    /// X-B3: why the bound matters. Without it, a grace period longer than the
+    ///       tolerance never completes under late attestations, and a genuine
+    ///       default stays blocked for as long as the attestations stay late.
+    function test_XB3_unboundedGraceBlocksDefaultIndefinitely() public {
+        lease = new VariantBUnbounded(10 days); // 10 days > 7-day tolerance
+        id = _create(oracle);
+        uint256 r = _lateAttestationsUntil(uint256(due0) + 40 days);
+        for (uint256 k = 0; k < 8; k++) {
+            assertFalse(_defaultPossibleAt(r + k * 1 days), "blocked at every point of the cycle");
+        }
     }
 }
 
