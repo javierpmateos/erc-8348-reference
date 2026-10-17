@@ -40,6 +40,13 @@ contract ForkUSD is ERC20 {
 ///          called the lease during the outage.
 ///      F3  A lease priced through ChainlinkConversionOracle settles a payment
 ///          against the live feed (end-to-end sanity on real data).
+///      F4  The bounded recovery grace (experiments/, variant B) evaluated on
+///          real round history: every recovery is the updatedAt of the round
+///          that ends a gap, an on-chain verifiable event. For a grace G with
+///          0 < G < maxStaleness, checks that after every recovery the feed
+///          stays fresh for at least G, so default is delayed by G at most and
+///          never blocked indefinitely. Optional env: LEASE_GRACE (seconds,
+///          default maxStaleness / 2).
 contract ChainlinkBaseForkTest is Test {
     /// Base mainnet L2 sequencer uptime feed (docs.chain.link/data-feeds/l2-sequencer-feeds)
     address internal constant SEQUENCER_UPTIME_FEED = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
@@ -137,6 +144,67 @@ contract ChainlinkBaseForkTest is Test {
         vm.prank(lessee);
         lease.pay(id, due);
         assertEq(uint8(lease.status(id)), uint8(IFinancialLease.LeaseStatus.Completed));
+    }
+
+    function test_F4_boundedRecoveryGraceOnRealHistory() public {
+        if (!forked || feedAddr == address(0)) vm.skip(true);
+        IAggregatorHistory feed = IAggregatorHistory(feedAddr);
+        uint256 maxStaleness = vm.envOr("LEASE_MAX_STALENESS", uint256(3600));
+        uint256 grace = vm.envOr("LEASE_GRACE", maxStaleness / 2);
+        uint256 depth = vm.envOr("ROUNDS_TO_SCAN", uint256(500));
+        assertGt(grace, 0, "grace must be non-zero");
+        assertLt(grace, maxStaleness, "grace must be shorter than maxStaleness");
+
+        // Collect updatedAt for the last `depth` rounds of the current phase, oldest first.
+        (uint80 roundId,,, uint256 latestUpdatedAt,) = feed.latestRoundData();
+        uint80 phase = roundId >> 64;
+        uint64 aggRound = uint64(roundId);
+        uint256[] memory desc = new uint256[](depth + 1);
+        uint256 n;
+        desc[n++] = latestUpdatedAt;
+        for (uint64 r = aggRound; r > 1 && n <= depth; r--) {
+            (,,, uint256 u,) = feed.getRoundData((phase << 64) | uint80(r - 1));
+            if (u == 0) break;
+            desc[n++] = u;
+        }
+        uint256[] memory t = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) t[i] = desc[n - 1 - i];
+
+        // A recovery happens at t[i+1] when t[i+1] - t[i] > maxStaleness.
+        // After it, the feed stays fresh until the start of the next stale
+        // interval (t[j] + maxStaleness for the next gap at j), or until now.
+        uint256 recoveries;
+        uint256 graceIncomplete;
+        uint256 minFreshAfterRecovery = type(uint256).max;
+        uint256 blockedByOutage;
+        uint256 extraBlockedByGrace;
+        for (uint256 i = 0; i + 1 < n; i++) {
+            if (t[i + 1] - t[i] <= maxStaleness) continue;
+            recoveries++;
+            blockedByOutage += t[i + 1] - (t[i] + maxStaleness);
+            uint256 freshUntil = block.timestamp;
+            for (uint256 j = i + 1; j + 1 < n; j++) {
+                if (t[j + 1] - t[j] > maxStaleness) {
+                    freshUntil = t[j] + maxStaleness;
+                    break;
+                }
+            }
+            uint256 fresh = freshUntil - t[i + 1];
+            if (fresh < minFreshAfterRecovery) minFreshAfterRecovery = fresh;
+            if (fresh < grace) graceIncomplete++;
+            extraBlockedByGrace += fresh < grace ? fresh : grace;
+        }
+
+        console2.log("feed:", feed.description());
+        console2.log("rounds scanned:                          ", n);
+        console2.log("history covered (s):                     ", t[n - 1] - t[0]);
+        console2.log("maxStaleness / grace (s):                ", maxStaleness, grace);
+        console2.log("recoveries (on-chain verifiable events): ", recoveries);
+        console2.log("time unpayable because of outages (s):   ", blockedByOutage);
+        console2.log("extra time default is held by grace (s): ", extraBlockedByGrace);
+        if (recoveries > 0) console2.log("shortest fresh period after a recovery:  ", minFreshAfterRecovery);
+        console2.log("recoveries where grace did not complete: ", graceIncomplete);
+        assertGt(n, 1, "round history is readable");
     }
 
     function feedDescription() internal view returns (string memory) {
