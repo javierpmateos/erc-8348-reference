@@ -10,8 +10,12 @@ pragma solidity ^0.8.24;
 ///      Chainlink-style feeds, recording time for attested indices), never
 ///      from a timestamp the counterparty asserts.
 interface IConversionOracleHistory {
-    /// @notice True iff, at every instant t in [from, to], the latest valid
-    ///         observation with asOf <= t was no older than `tolerance`.
+    /// @notice True iff, at every instant t in [from, to], the observation
+    ///         actually in force at t (the latest one recorded at or before t,
+    ///         valid or not) was usable for conversion and no older than
+    ///         `tolerance`. An unusable observation in force inside the window
+    ///         makes the result false, even if an earlier usable observation
+    ///         was still within tolerance.
     /// @dev Fail-closed: returns false when the history the oracle can walk
     ///      does not reach back to `from` (including when the walk hits its
     ///      round cap). MUST NOT revert for a well-formed window

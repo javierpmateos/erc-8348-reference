@@ -61,7 +61,12 @@ payment-path liveness rule of the spec:
   oracle's own history (`IConversionOracleHistory`: round `updatedAt` for
   Chainlink-style feeds, recording time for attested rates), never from a
   timestamp a caller supplies. Because `G < maxOracleStaleness`, every grace
-  period completes: an outage delays default by at most its length plus `G`.
+  period completes unless a further outage begins (and within the history
+  limit below): an outage delays default by at most its length plus `G`.
+  `G = maxOracleStaleness / 2` is this reference's policy, not a
+  recommendation: a 30-day tolerance gives a 15-day grace, a 2-hour tolerance a
+  1-hour grace. Whether that is a commercially reasonable time to pay is for
+  the agreement to decide.
 
 An indexed lease with a tolerance must use an oracle that implements
 `IConversionOracleHistory`; `createLease` reverts with `OracleWithoutHistory`
@@ -76,9 +81,13 @@ restricts default actions, it does not waive penalties.
 Costs and limits, on the lessor's side:
 
 - The history walk examines at most 256 observations and fails closed. If a
-  feed updates more than ~256 times within `G`, or the feed changes phase,
-  default stays blocked until enough history accumulates again (for a phase
-  change, `G`). Choose `maxOracleStaleness` with the feed's cadence in mind.
+  feed updates more than ~256 times within `G` (e.g. every 6 s with a 1-hour
+  tolerance), default stays blocked for as long as that cadence lasts, even
+  though the index is perfectly fresh (`test_H17`). After a phase change it
+  stays blocked for `G`. This reference is therefore only suitable for feeds
+  whose cadence keeps well under 256 updates per `G` (daily or hourly indices
+  with tolerances of hours or days); a production version would need a walk
+  that makes progress across transactions or skips provably gap-free spans.
 - If the index never recovers (e.g. a retired feed), default stays blocked; the
   oracle cannot be replaced after origination in this reference, so mutual
   termination is the only exit. The spec asks implementations to document a
@@ -87,6 +96,14 @@ Costs and limits, on the lessor's side:
   against the mock feed (warm storage, `test_H12`); expect more on a real,
   proxied feed. With a 1-day feed and a tolerance of a few days the walk reads
   a handful of rounds.
+- Rule B trusts the oracle's answer about its own history, just as `pay()`
+  trusts its rate: an oracle chosen at origination that misreports its history
+  can skip the grace. Use the adapters in `src/oracles/` or audit a custom one.
+- The history walk detects stale intervals and invalid answers. Other reasons
+  for `latestRate` to revert (e.g. a feed changing decimals) are only detected
+  at the current instant.
+- With `maxOracleStaleness = 0` the index is never stale and the grace does not
+  apply; default actions still revert while the rate cannot be read.
 - Release of the asset upon default (asset-bound extension) is subject to the
   same rule in the spec; this reference does not implement asset release.
 

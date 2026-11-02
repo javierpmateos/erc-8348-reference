@@ -17,7 +17,11 @@ import {FreshnessHistory} from "./FreshnessHistory.sol";
 contract AttestedConversionOracle is IConversionOracle, IConversionOracleHistory, Ownable {
     address public attester;
     /// @dev Recording time of every attestation (append-only), so freshness
-    ///      over a past window can be verified on-chain.
+    ///      over a past window can be verified on-chain. asOf is the recording
+    ///      time, not the off-chain observation time: a publication delay by the
+    ///      attester is not visible on-chain, and the attester is trusted to
+    ///      record each value promptly (see the spec's recording bound). Zero
+    ///      rates are rejected, so every stored entry is usable.
     uint64[] public attestationTimes;
     uint256 public rate;
     uint64 public asOf;

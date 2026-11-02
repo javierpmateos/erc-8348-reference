@@ -275,6 +275,10 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
         return l.maxOracleStaleness / 2;
     }
 
+    /// @dev Interface-presence check only: it proves the oracle answers
+    ///      continuouslyFresh without reverting, not that its history is
+    ///      useful. An oracle that always answers false passes and makes default
+    ///      impossible (test_H18); choosing the oracle is part of origination.
     function _requireHistory(address oracle, uint64 tolerance) internal view {
         if (tolerance < 2) revert OracleWithoutHistory();
         uint64 nowTs = uint64(block.timestamp);
@@ -291,15 +295,24 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
     ///      updatedAt / attestation recording time), so the lessee had at
     ///      least G seconds to pay after any outage. Because G < tolerance,
     ///      every recovery opens a fresh window of at least `tolerance`
-    ///      seconds, so the grace always completes (bounded delay, never an
-    ///      indefinite block). A reverting oracle also blocks: if the rate
-    ///      cannot be read, pay() cannot succeed either.
+    ///      seconds, so the grace always completes unless a further outage
+    ///      begins (and within the history walk's limits).
+    ///      Indexed leases always read the rate first, with or without a
+    ///      tolerance: if latestRate reverts (invalid answer, decimals changed,
+    ///      future observation), pay() cannot succeed either, so the default
+    ///      action reverts too. That check is only possible at the current
+    ///      instant; the history walk (B) covers timestamps and invalid answers.
+    ///      Rule B trusts the oracle's answer about its own history, exactly as
+    ///      pay() trusts its rate: the oracle is fixed at origination and
+    ///      accepted by both parties.
     function _requirePaymentPathLive(uint256 leaseId) internal view {
         Lease storage l = _leases[leaseId];
-        uint64 tol = l.maxOracleStaleness;
-        if (l.oracle == address(0) || tol == 0) return;
-        (, uint64 asOf) = IConversionOracle(l.oracle).latestRate();
+        if (l.oracle == address(0)) return;
+        (uint256 rate, uint64 asOf) = IConversionOracle(l.oracle).latestRate();
+        if (rate == 0) revert PaymentPathUnavailable(); // generic oracles: a zero rate cannot price pay()
         if (asOf > block.timestamp) revert FutureObservation();
+        uint64 tol = l.maxOracleStaleness;
+        if (tol == 0) return; // no tolerance: the index is never stale (spec scope)
         if (block.timestamp - asOf > tol) revert PaymentPathUnavailable();
         uint64 nowTs = uint64(block.timestamp);
         uint64 g = tol / 2;

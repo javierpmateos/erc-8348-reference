@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {FinancialLease} from "../src/FinancialLease.sol";
+import {MockUVAOracle} from "../src/MockUVAOracle.sol";
 import {IConversionOracle} from "../src/IConversionOracle.sol";
 import {IFinancialLease} from "../src/IFinancialLease.sol";
 import {ChainlinkConversionOracle} from "../src/oracles/ChainlinkConversionOracle.sol";
@@ -21,6 +22,28 @@ contract LegacyAggregator {
 
     function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
         return (0, 1e8, block.timestamp, block.timestamp, 0);
+    }
+}
+
+/// @dev Generic oracle that reports a zero rate and claims a fresh history.
+contract ZeroRateOracle {
+    function latestRate() external view returns (uint256, uint64) {
+        return (0, uint64(block.timestamp));
+    }
+
+    function continuouslyFresh(uint64, uint64, uint64) external pure returns (bool) {
+        return true;
+    }
+}
+
+/// @dev History that never proves freshness.
+contract NeverFreshOracle {
+    function latestRate() external view returns (uint256, uint64) {
+        return (1e18, uint64(block.timestamp));
+    }
+
+    function continuouslyFresh(uint64, uint64, uint64) external pure returns (bool) {
+        return false;
     }
 }
 
@@ -242,6 +265,90 @@ contract OracleHistoryTest is Test {
         lease.declareDefault(id);
         emit log_named_uint("declareDefault gas, ~240 rounds in the grace window", g0 - gasleft());
         assertEq(uint8(lease.status(id)), uint8(IFinancialLease.LeaseStatus.InDefault));
+    }
+
+    // ─── H13: no tolerance, unusable rate -> default still blocked ───────
+    /// @dev With maxStaleness = 0 the index is never "stale", but if the rate
+    ///      cannot be read, pay() reverts, so default actions must revert too.
+    function test_H13_zeroTolerance_unreadableRateBlocksDefault() public {
+        FinancialLease lease = new FinancialLease();
+        MockERC20 token = new MockERC20();
+        feed.pushRound(1e8, T0 + 10_000);
+        uint256 id = lease.createLease(_paramsFull(address(cl), 0, address(token), makeAddr("lessee"), T0 + 10_000 + 1));
+        vm.warp(T0 + 10_000 + 1 days);
+        feed.pushRound(0, T0 + 10_000 + 1 days); // invalid answer: latestRate reverts
+        vm.expectRevert(ChainlinkConversionOracle.InvalidAnswer.selector);
+        lease.declareDefault(id);
+        feed.pushRound(1e8, T0 + 10_000 + 1 days);
+        lease.declareDefault(id); // rate readable again, no tolerance: allowed
+        assertEq(uint8(lease.status(id)), uint8(IFinancialLease.LeaseStatus.InDefault));
+    }
+
+    // ─── H14: a zero rate now blocks default actions ─────────────────────
+    function test_H14_zeroRateBlocksDefault() public {
+        FinancialLease lease = new FinancialLease();
+        ZeroRateOracle z = new ZeroRateOracle();
+        uint256 id = lease.createLease(_paramsFull(address(z), 7 days, makeAddr("token"), makeAddr("lessee"), T0 + 10_000 + 1));
+        vm.warp(T0 + 10_000 + 1 days);
+        vm.expectRevert(FinancialLease.PaymentPathUnavailable.selector);
+        lease.declareDefault(id);
+    }
+
+    // ─── H15: stored histories cannot hold unusable entries ──────────────
+    /// @dev walkStored sees timestamps only, so the stored-history oracles
+    ///      must reject unusable values at write time.
+    function test_H15_storedHistoriesRejectZeroRate() public {
+        MockUVAOracle m = new MockUVAOracle(1e18);
+        vm.expectRevert(MockUVAOracle.InvalidRate.selector);
+        m.set(0);
+        address att = makeAddr("attester");
+        AttestedConversionOracle a = new AttestedConversionOracle(address(this), att);
+        vm.prank(att);
+        vm.expectRevert(AttestedConversionOracle.InvalidRate.selector);
+        a.attest(0);
+    }
+
+    // ─── H17: more than 256 rounds within G -> default blocked (liveness loss)
+    /// @dev Documents the cost of fail-closed: the feed is fresh the whole
+    ///      time (every 6 s, tolerance 1 h, G 30 min = 300 rounds), but the
+    ///      walk cannot prove it within 256 steps, so a genuine default is
+    ///      refused for as long as that cadence lasts.
+    function test_H17_tooManyRoundsInGraceBlocksGenuineDefault() public {
+        FinancialLease lease = new FinancialLease();
+        uint64 tol = 1 hours;
+        feed.pushRound(1e8, T0 + 10_000);
+        uint256 id = lease.createLease(_paramsFull(address(cl), tol, makeAddr("token"), makeAddr("lessee"), T0 + 10_000 + 1));
+        uint256 t = T0 + 10_000;
+        for (uint256 i = 0; i < 400; i++) {
+            t += 6;
+            feed.pushRound(1e8, t);
+        }
+        vm.warp(t);
+        vm.expectRevert(FinancialLease.RecoveryGraceActive.selector);
+        lease.declareDefault(id);
+    }
+
+    // ─── H18: an oracle whose history never proves freshness ─────────────
+    /// @dev Origination only checks that continuouslyFresh answers; it cannot
+    ///      tell useful history from none. Such a lease can never default.
+    function test_H18_neverFreshOracleMakesDefaultImpossible() public {
+        FinancialLease lease = new FinancialLease();
+        NeverFreshOracle nf = new NeverFreshOracle();
+        uint256 id = lease.createLease(_paramsFull(address(nf), 7 days, makeAddr("token"), makeAddr("lessee"), T0 + 10_000 + 1));
+        vm.warp(T0 + 10_000 + 30 days);
+        vm.expectRevert(FinancialLease.RecoveryGraceActive.selector);
+        lease.declareDefault(id);
+    }
+
+    // ─── H21: same timestamp, one round invalid -> fail closed ───────────
+    /// @dev Two rounds share a timestamp; a transaction between them in that
+    ///      block would have seen the invalid one, so the window is not proven.
+    function test_H21_sameTimestampInvalidRoundFailsClosed() public {
+        feed.pushRound(1e8, T0 + 1000);
+        feed.pushRound(0, T0 + 1200);
+        feed.pushRound(1e8, T0 + 1200);
+        assertFalse(cl.continuouslyFresh(T0 + 1000, T0 + 1300, TOL));
+        assertTrue(cl.continuouslyFresh(T0 + 1300, T0 + 1300, TOL), "window entirely after the shared timestamp");
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────
