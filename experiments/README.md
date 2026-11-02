@@ -53,4 +53,6 @@ the indefinite case only arises without the bound (X-B3).
 
 Current proposal for the standard: A and bounded B as MUST, C as SHOULD, D as
 an optional extension with a mandatory timeout, and P4 documented as residual
-risk.
+risk. A and bounded B are now implemented in the reference contract
+(`src/FinancialLease.sol`, with `G = maxOracleStaleness / 2`); these variants
+stay as the record of how the options were compared.

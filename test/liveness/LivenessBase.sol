@@ -76,6 +76,19 @@ abstract contract LivenessBase is Test {
         leaseId = lease.createLease(p);
     }
 
+    /// @dev Advances to `t` re-attesting the index daily, so it stays
+    ///      continuously fresh (no outage, no recovery grace).
+    function _keepFresh(uint256 t) internal {
+        // vm.getBlockTimestamp(), not block.timestamp: solc may treat the
+        // latter as constant within the tx and hoist it out of the loop.
+        for (uint256 cur = vm.getBlockTimestamp() + 1 days; cur < t; cur += 1 days) {
+            vm.warp(cur);
+            oracle.set(1e18);
+        }
+        vm.warp(t);
+        oracle.set(1e18);
+    }
+
     function _status() internal view returns (IFinancialLease.LeaseStatus) {
         return lease.status(id);
     }

@@ -28,6 +28,15 @@ contract LivenessHandler is Test {
     uint256 public ghost_adverseWhileBlocked;
     uint256 public ghost_adverseTotal;
 
+    // Independent model of rule A + B (does not call the oracle's history):
+    // a recovery happens when an attestation lands on a stale index. Default
+    // actions are allowed iff the index is fresh now and now >= lastRecovery + G.
+    uint256 public lastRecovery;
+    uint256 public ghost_adverseWhileIndexBlocked; // must stay 0 (strict)
+    uint256 public ghost_overBlocked; // index-liveness revert while the model allows: must stay 0
+
+    FinancialLease.CreateLeaseParams internal params;
+
     constructor() {
         lease = new FinancialLease();
         token = new HostileToken();
@@ -70,16 +79,57 @@ contract LivenessHandler is Test {
             servicingInputs: new bytes32[](0),
             servicingMaxStaleness: new uint64[](0)
         });
+        params = p;
         vm.prank(lessor);
         id = lease.createLease(p);
+        lastRecovery = block.timestamp; // oracle history starts here
+    }
+
+    /// @dev Coverage: once the lease is terminal, originate a fresh one (same
+    ///      oracle, so the recovery model carries over), with due dates
+    ///      relative to now, so default actions keep being exercised.
+    function newLeaseIfTerminal() external {
+        IFinancialLease.LeaseStatus st = lease.status(id);
+        if (
+            st != IFinancialLease.LeaseStatus.Terminated && st != IFinancialLease.LeaseStatus.Completed
+                && st != IFinancialLease.LeaseStatus.PurchaseExercised
+        ) return;
+        uint256 nowTs = vm.getBlockTimestamp();
+        for (uint256 i = 0; i < 6; i++) {
+            params.dueDates[i] = uint64(nowTs + (i + 1) * 30 days);
+        }
+        address owner = holders[0];
+        vm.prank(owner);
+        id = lease.createLease(params);
+    }
+
+    function indexStale() public view returns (bool) {
+        (, uint64 asOf) = oracle.latestRate();
+        return block.timestamp > asOf && block.timestamp - asOf > STALENESS;
+    }
+
+    /// @dev Model of rule A + bounded B for this lease.
+    function indexBlocked() public view returns (bool) {
+        return indexStale() || block.timestamp < lastRecovery + STALENESS / 2;
+    }
+
+    function _record(bool blocked, bool indexBlocked_, bool ok, bytes memory err) internal {
+        if (ok) {
+            ghost_adverseTotal++;
+            if (blocked) ghost_adverseWhileBlocked++;
+            if (indexBlocked_) ghost_adverseWhileIndexBlocked++;
+        } else if (!indexBlocked_ && err.length >= 4) {
+            bytes4 sel = bytes4(err);
+            if (sel == FinancialLease.PaymentPathUnavailable.selector || sel == FinancialLease.RecoveryGraceActive.selector) {
+                ghost_overBlocked++;
+            }
+        }
     }
 
     /// @dev True when neither the lessee nor anyone else can pay right now
     ///      because of a dependency outside the lessee's control.
     function paymentPathBlocked() public view returns (bool) {
-        (, uint64 asOf) = oracle.latestRate();
-        bool stale = block.timestamp > asOf && block.timestamp - asOf > STALENESS;
-        return stale || token.paused() || token.blacklisted(lease.ownerOf(id));
+        return indexStale() || token.paused() || token.blacklisted(lease.ownerOf(id));
     }
 
     // ─── ordinary activity ─────────────────────────────────────────────
@@ -88,6 +138,7 @@ contract LivenessHandler is Test {
     }
 
     function refreshOracle() external {
+        if (indexStale()) lastRecovery = block.timestamp;
         oracle.set(1e18);
     }
 
@@ -118,21 +169,25 @@ contract LivenessHandler is Test {
     // ─── adverse transitions by the current holder ─────────────────────
     function declareDefault() external {
         bool blocked = paymentPathBlocked();
+        bool ib = indexBlocked();
         address holder = lease.ownerOf(id);
         vm.prank(holder);
         try lease.declareDefault(id) {
-            ghost_adverseTotal++;
-            if (blocked) ghost_adverseWhileBlocked++;
-        } catch {}
+            _record(blocked, ib, true, "");
+        } catch (bytes memory err) {
+            _record(blocked, ib, false, err);
+        }
     }
 
     function terminateForDefault() external {
         bool blocked = paymentPathBlocked();
+        bool ib = indexBlocked();
         address holder = lease.ownerOf(id);
         vm.prank(holder);
         try lease.terminateForDefault(id) {
-            ghost_adverseTotal++;
-            if (blocked) ghost_adverseWhileBlocked++;
-        } catch {}
+            _record(blocked, ib, true, "");
+        } catch (bytes memory err) {
+            _record(blocked, ib, false, err);
+        }
     }
 }

@@ -17,13 +17,17 @@ import {LivenessBase} from "./LivenessBase.sol";
 ///      blocked party suffers nothing irreversible. A row is a KNOWN ISSUE when
 ///      the payment path is unavailable while declareDefault/terminateForDefault
 ///      still succeed ("asymmetric liveness"). KNOWN ISSUE tests assert the
-///      CURRENT behaviour so the suite stays green and documents it; when the
-///      issue is fixed, flip the final assertion and rename the test.
+///      CURRENT behaviour so the suite stays green and documents it. Rows marked
+///      FIXED were known issues closed by the payment-path liveness rule
+///      (A: no default actions while the index is stale; B: none until the
+///      index has been continuously fresh for the recovery grace G, with
+///      0 < G < tolerance). L3 and L4 (token-side failures) remain open: the
+///      spec recommends pull payments for L3; L4 is a documented residual risk.
 ///
 ///      Background: https://ethereum-magicians.org/t/erc-8348-financial-lease/29076
 contract LivenessMatrixTest is LivenessBase {
-    // ─── L1: index oracle stale at the due date ── KNOWN ISSUE ───────────────
-    function test_L1_KNOWN_ISSUE_staleOracle_blocksPay_defaultProceeds() public {
+    // ─── L1: index oracle stale at the due date ── FIXED (rule A) ────────────
+    function test_L1_FIXED_staleOracle_blocksPayAndDefault() public {
         vm.warp(uint256(due0) + 1 days); // last observation 31 days old > 7 days
 
         vm.prank(lessee);
@@ -35,30 +39,111 @@ contract LivenessMatrixTest is LivenessBase {
         lease.pay(id, 100 * UNIT);
 
         assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.InArrears));
+        // Arrears keep accruing: the rule restricts default actions, it does
+        // not waive penalties (left to the agreement, see the spec).
         uint256 a0 = lease.arrears(id);
         vm.warp(block.timestamp + 1 days);
         assertGt(lease.arrears(id), a0, "penalties accrue while nobody can pay");
 
-        assertTrue(_defaultAndTerminate(), "KNOWN ISSUE: default and termination succeed during the outage");
+        vm.prank(lessor);
+        vm.expectRevert(FinancialLease.PaymentPathUnavailable.selector);
+        lease.declareDefault(id);
+        assertFalse(_defaultAndTerminate(), "no default or termination during the outage");
     }
 
-    // ─── L2: oracle recovers; default in the same block ── KNOWN ISSUE ──────
-    function test_L2_KNOWN_ISSUE_oracleRecovery_defaultBeforeLesseeCanPay() public {
+    // ─── L1b: outage after a valid default blocks termination ── FIXED (A, B)
+    function test_L1b_FIXED_staleOracle_blocksTerminationOfExistingDefault() public {
+        _keepFresh(uint256(due0) + 1 days);
+        vm.prank(lessor);
+        lease.declareDefault(id); // index continuously fresh: allowed
+        assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.InDefault));
+
+        vm.warp(vm.getBlockTimestamp() + TERMINATION_DELAY + 1 days); // timelock elapsed, index 8 days old
+        vm.prank(lessor);
+        vm.expectRevert(FinancialLease.PaymentPathUnavailable.selector);
+        lease.terminateForDefault(id);
+
+        oracle.set(1e18); // recovery
+        vm.prank(lessor);
+        vm.expectRevert(FinancialLease.RecoveryGraceActive.selector);
+        lease.terminateForDefault(id);
+
+        vm.warp(vm.getBlockTimestamp() + lease.recoveryGrace(id));
+        vm.prank(lessor);
+        lease.terminateForDefault(id);
+        assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.Terminated));
+    }
+
+    // ─── L2: oracle recovers; default in the same block ── FIXED (rule B) ────
+    function test_L2_FIXED_oracleRecovery_graceLetsLesseePay() public {
         vm.warp(uint256(due0) + 10 days); // outage spans the due date
         oracle.set(1e18); // index recovers in this block
 
-        // The holder acts in the same block, before the lessee's payment lands.
+        // The holder tries to act in the same block, before the lessee's payment lands.
         address holder = lease.ownerOf(id);
         vm.prank(holder);
+        vm.expectRevert(FinancialLease.RecoveryGraceActive.selector);
         lease.declareDefault(id);
-        assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.InDefault), "KNOWN ISSUE: no grace after recovery");
 
-        // The lessee's payment in the next transaction cures arrears, but the
-        // default declaration (and its timelock anchor) already happened.
+        // The lessee pays in the next transaction and the lease completes.
         uint256 owed = lease.arrears(id);
         vm.prank(lessee);
         lease.pay(id, owed);
         assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.Completed));
+    }
+
+    // ─── L2b: the grace is bounded ── FIXED (rule B, 0 < G < tolerance) ──────
+    /// @dev With no further attestation after the recovery, the index stays
+    ///      fresh for `tolerance` seconds, longer than G, so default becomes
+    ///      available again exactly G seconds after the recovery.
+    function test_L2b_FIXED_graceIsBoundedAfterRecovery() public {
+        uint64 g = lease.recoveryGrace(id);
+        assertEq(g, STALENESS / 2, "reference grace = tolerance / 2");
+
+        // Absolute instants derived from due0, never from a saved
+        // block.timestamp (see the optimizer note in OracleAdapters.t.sol).
+        uint256 r = uint256(due0) + 10 days;
+        vm.warp(r);
+        oracle.set(1e18);
+
+        vm.warp(r + g - 1);
+        vm.prank(lessor);
+        vm.expectRevert(FinancialLease.RecoveryGraceActive.selector);
+        lease.declareDefault(id);
+
+        vm.warp(r + g);
+        vm.prank(lessor);
+        lease.declareDefault(id);
+        assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.InDefault));
+    }
+
+    // ─── L2c: repeated outages delay default but cannot block it ── FIXED ────
+    /// @dev Attestations arrive every tolerance + 1 day, so the index goes
+    ///      stale in every cycle and each recovery restarts the grace. Because
+    ///      G < tolerance, every cycle still opens a window [r + G, r + tolerance]
+    ///      in which default is available. (Each outage restarting the grace is
+    ///      the open point noted in the spec; a per-installment cap is possible.)
+    function test_L2c_FIXED_repeatedOutages_defaultWindowEveryCycle() public {
+        uint64 g = lease.recoveryGrace(id);
+        for (uint256 c = 0; c < 4; c++) {
+            // Previous attestation at r - (STALENESS + 1 days): stale before r.
+            uint256 r = uint256(due0) + 1 days + (c + 1) * (STALENESS + 1 days);
+            vm.warp(r);
+            oracle.set(1e18);
+
+            vm.prank(lessor);
+            vm.expectRevert(FinancialLease.RecoveryGraceActive.selector);
+            lease.declareDefault(id);
+
+            // Inside [r + G, r + tolerance] default is available; check it and
+            // roll back, so the next cycle starts from the same lease state.
+            vm.warp(r + g);
+            uint256 snap = vm.snapshotState();
+            vm.prank(lessor);
+            lease.declareDefault(id);
+            assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.InDefault), "default available in every cycle");
+            vm.revertToState(snap);
+        }
     }
 
     // ─── L3: lessor-position holder blacklisted by the token ── KNOWN ISSUE ─
@@ -98,17 +183,43 @@ contract LivenessMatrixTest is LivenessBase {
         assertTrue(_defaultAndTerminate(), "KNOWN ISSUE: default and termination succeed while the token is paused");
     }
 
-    // ─── L5: chain downtime (e.g. L2 sequencer) across the due date ── KNOWN ISSUE
+    // ─── L5: chain downtime across the due date, fixed denomination ── KNOWN ISSUE
     /// @dev While the chain is down nobody can transact. When it resumes, the
     ///      due date is in the past and the first block belongs to whoever gets
-    ///      in first: same shape as L2, with no oracle involved.
-    function test_L5_KNOWN_ISSUE_chainDowntime_defaultInFirstBlockAfterResume() public {
+    ///      in first. A fixed-denomination lease has no index, so the
+    ///      payment-path liveness rule has nothing to measure and does not apply.
+    function test_L5_KNOWN_ISSUE_chainDowntime_fixedDenomination_noGrace() public {
         id = _create(address(0));
         vm.warp(uint256(due0) + 2 days); // chain was down from before due0 until now
         address holder = lease.ownerOf(id);
         vm.prank(holder);
         lease.declareDefault(id);
         assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.InDefault), "KNOWN ISSUE: no grace after downtime");
+    }
+
+    // ─── L5b: chain downtime longer than the tolerance, indexed lease ── FIXED
+    /// @dev The index feed cannot update while the chain is down either, so a
+    ///      downtime longer than the tolerance leaves a gap in the oracle's
+    ///      history and the recovery grace applies. A downtime shorter than the
+    ///      tolerance leaves no gap and gets no grace (same as L5).
+    function test_L5b_FIXED_longDowntime_indexedLeaseGetsGrace() public {
+        _keepFresh(uint256(due0) - 1 days);
+        vm.warp(uint256(due0) + 8 days); // down for 9 days > 7-day tolerance
+        address holder = lease.ownerOf(id);
+
+        vm.prank(holder);
+        vm.expectRevert(FinancialLease.PaymentPathUnavailable.selector);
+        lease.declareDefault(id); // first block, before the feed updates
+
+        oracle.set(1e18); // feed updates in the same block
+        vm.prank(holder);
+        vm.expectRevert(FinancialLease.RecoveryGraceActive.selector);
+        lease.declareDefault(id);
+
+        uint256 owed = lease.arrears(id);
+        vm.prank(lessee);
+        lease.pay(id, owed);
+        assertEq(uint8(_status()), uint8(IFinancialLease.LeaseStatus.Completed));
     }
 
     // ─── L6: lessee itself blacklisted ── SAFE ───────────────────────────────

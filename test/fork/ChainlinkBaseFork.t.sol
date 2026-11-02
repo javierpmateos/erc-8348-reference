@@ -47,6 +47,10 @@ contract ForkUSD is ERC20 {
 ///          stays fresh for at least G, so default is delayed by G at most and
 ///          never blocked indefinitely. Optional env: LEASE_GRACE (seconds,
 ///          default maxStaleness / 2).
+///      F5  The adapter's on-chain history walk (continuouslyFresh, used by
+///          the lease's liveness rule) agrees with an offline reconstruction
+///          from the same rounds, at every sampled instant, on real round ids
+///          (phase-encoded). Env as F4.
 contract ChainlinkBaseForkTest is Test {
     /// Base mainnet L2 sequencer uptime feed (docs.chain.link/data-feeds/l2-sequencer-feeds)
     address internal constant SEQUENCER_UPTIME_FEED = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
@@ -205,6 +209,49 @@ contract ChainlinkBaseForkTest is Test {
         if (recoveries > 0) console2.log("shortest fresh period after a recovery:  ", minFreshAfterRecovery);
         console2.log("recoveries where grace did not complete: ", graceIncomplete);
         assertGt(n, 1, "round history is readable");
+    }
+
+    function test_F5_adapterHistoryMatchesOfflineReconstruction() public {
+        if (!forked || feedAddr == address(0)) vm.skip(true);
+        IAggregatorHistory feed = IAggregatorHistory(feedAddr);
+        ChainlinkConversionOracle adapter = new ChainlinkConversionOracle(feedAddr, 6);
+        uint256 tol = vm.envOr("LEASE_MAX_STALENESS", uint256(3600));
+        uint256 g = vm.envOr("LEASE_GRACE", tol / 2);
+        uint256 depth = vm.envOr("ROUNDS_TO_SCAN", uint256(150));
+        if (depth > 200) depth = 200; // stay under the adapter's 256-round cap
+
+        (uint80 roundId,,, uint256 latestUpdatedAt,) = feed.latestRoundData();
+        uint80 phase = roundId >> 64;
+        uint256[] memory desc = new uint256[](depth + 1);
+        uint256 n;
+        desc[n++] = latestUpdatedAt;
+        for (uint64 r = uint64(roundId); r > 1 && n <= depth; r--) {
+            (,,, uint256 u,) = feed.getRoundData((phase << 64) | uint80(r - 1));
+            if (u == 0) break;
+            desc[n++] = u;
+        }
+        uint256[] memory t = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) t[i] = desc[n - 1 - i];
+
+        uint256 checked;
+        uint256 freshCount;
+        for (uint256 k = 1; k < n; k++) {
+            uint256 sAt = t[k];
+            if (sAt < t[0] + g) continue; // window would start before the scanned history
+            // Offline model: the window [sAt - g, sAt] is fresh iff no gap
+            // between consecutive observations that matter exceeds tol.
+            bool model = true;
+            for (uint256 j = k; j > 0; j--) {
+                if (t[j] - t[j - 1] > tol) { model = false; break; }
+                if (t[j - 1] <= sAt - g) break;
+            }
+            bool onchain = adapter.continuouslyFresh(uint64(sAt - g), uint64(sAt), uint64(tol));
+            assertEq(onchain, model, "adapter history walk disagrees with the offline reconstruction");
+            checked++;
+            if (model) freshCount++;
+        }
+        console2.log("instants checked / fresh over the grace window:", checked, freshCount);
+        assertGt(checked, 0, "nothing sampled: increase ROUNDS_TO_SCAN");
     }
 
     function feedDescription() internal view returns (string memory) {

@@ -7,6 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IConversionOracle} from "./IConversionOracle.sol";
+import {IConversionOracleHistory} from "./IConversionOracleHistory.sol";
 import {IFinancialLease, INPUT_INDEX_OBSERVATION, TERMINATION_DEFAULT} from "./IFinancialLease.sol";
 import {IFinancialLeaseAnchored} from "./IFinancialLeaseAnchored.sol";
 
@@ -116,6 +117,16 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
     error FutureObservation();
     error InvalidTerminationDelay();
     error TimelockNotElapsed();
+    /// @dev Payment-path liveness (A): the index observation is stale, so
+    ///      pay() cannot succeed; default actions are blocked.
+    error PaymentPathUnavailable();
+    /// @dev Payment-path liveness (B): the index has not been continuously
+    ///      fresh for the whole recovery grace yet.
+    error RecoveryGraceActive();
+    /// @dev An indexed lease with a staleness tolerance needs an oracle that
+    ///      implements IConversionOracleHistory, and a tolerance of at least
+    ///      2 s so that the grace (tolerance / 2) is non-zero.
+    error OracleWithoutHistory();
 
     /// @dev Not part of IFinancialLease: specific to how this
     ///      implementation resolves the defaultDeclarer role (fix S4-01).
@@ -174,6 +185,7 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
         }
         require(p.servicingInputs.length == p.servicingMaxStaleness.length, "bad servicing config");
         if (p.terminationDelay == 0) revert InvalidTerminationDelay();
+        if (p.oracle != address(0) && p.maxStaleness != 0) _requireHistory(p.oracle, p.maxStaleness);
 
         // Change 1: the anchor tuple is either all-zero (not anchored) or
         // fully set. Partial tuples are invalid.
@@ -247,6 +259,52 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
         if (l.maxOracleStaleness != 0 && block.timestamp - asOf > l.maxOracleStaleness) {
             revert StaleOracle();
         }
+    }
+
+    // ─── Payment-path liveness (A + bounded B) ────────────────
+
+    /// @notice Recovery grace G of the liveness rule: maxOracleStaleness / 2.
+    /// @dev Derived instead of configured, so CreateLeaseParams (and the
+    ///      interface) stay unchanged, and 0 < G < maxOracleStaleness holds by
+    ///      construction (createLease rejects a tolerance below 2 s). 0 when
+    ///      the lease is fixed-denomination or has no tolerance: then the
+    ///      index is never "stale" and the rule does not apply.
+    function recoveryGrace(uint256 leaseId) public view returns (uint64) {
+        Lease storage l = _leases[leaseId];
+        if (l.oracle == address(0)) return 0;
+        return l.maxOracleStaleness / 2;
+    }
+
+    function _requireHistory(address oracle, uint64 tolerance) internal view {
+        if (tolerance < 2) revert OracleWithoutHistory();
+        uint64 nowTs = uint64(block.timestamp);
+        try IConversionOracleHistory(oracle).continuouslyFresh(nowTs, nowTs, tolerance) returns (bool) {}
+        catch {
+            revert OracleWithoutHistory();
+        }
+    }
+
+    /// @dev Precondition of declareDefault and terminateForDefault.
+    ///      (A) the index observation is fresh now, so pay() can price an
+    ///      installment; (B) it has been continuously fresh over the last
+    ///      G seconds, measured from the oracle's own on-chain history (round
+    ///      updatedAt / attestation recording time), so the lessee had at
+    ///      least G seconds to pay after any outage. Because G < tolerance,
+    ///      every recovery opens a fresh window of at least `tolerance`
+    ///      seconds, so the grace always completes (bounded delay, never an
+    ///      indefinite block). A reverting oracle also blocks: if the rate
+    ///      cannot be read, pay() cannot succeed either.
+    function _requirePaymentPathLive(uint256 leaseId) internal view {
+        Lease storage l = _leases[leaseId];
+        uint64 tol = l.maxOracleStaleness;
+        if (l.oracle == address(0) || tol == 0) return;
+        (, uint64 asOf) = IConversionOracle(l.oracle).latestRate();
+        if (asOf > block.timestamp) revert FutureObservation();
+        if (block.timestamp - asOf > tol) revert PaymentPathUnavailable();
+        uint64 nowTs = uint64(block.timestamp);
+        uint64 g = tol / 2;
+        uint64 from = nowTs > g ? nowTs - g : 0;
+        if (!IConversionOracleHistory(l.oracle).continuouslyFresh(from, nowTs, tol)) revert RecoveryGraceActive();
     }
 
     /// @dev Charges: round UP (against the payer)
@@ -500,6 +558,7 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
 
         (uint256 principalArrears, uint256 penaltyGrossNow,,) = _computeState(l);
         if (principalArrears == 0) revert WrongStatus();
+        _requirePaymentPathLive(leaseId);
 
         if (statusBefore == LeaseStatus.Active) {
             emit ArrearsAccrued(leaseId, principalArrears + _penaltyOwed(l, penaltyGrossNow));
@@ -577,6 +636,7 @@ contract FinancialLease is ERC721, ReentrancyGuard, IFinancialLease, IFinancialL
         if (block.timestamp < uint256(l.defaultDeclaredAt) + uint256(l.terminationDelay)) {
             revert TimelockNotElapsed();
         }
+        _requirePaymentPathLive(leaseId);
 
         _terminate(leaseId, l, TERMINATION_DEFAULT);
     }

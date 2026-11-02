@@ -46,23 +46,63 @@ leases is deployed on Base Sepolia — see [DEPLOYMENTS.md](./DEPLOYMENTS.md).
   contractual financing instrument, not to a classification under IFRS 16 or
   ASC 842.
 
-## Known issues
+## Payment-path liveness
 
 When something outside the lessee's control blocks payment, the counterparty
-can still move the lease towards default. `test/liveness/` reproduces each case:
+should not be able to move the lease towards default in the meantime.
+`test/liveness/` reproduces each case. The index cases are closed by the
+payment-path liveness rule of the spec:
+
+- **A.** `declareDefault` and `terminateForDefault` revert with
+  `PaymentPathUnavailable` while the index is stale.
+- **B.** They revert with `RecoveryGraceActive` until the index has been
+  continuously fresh for the recovery grace `G = maxOracleStaleness / 2`
+  (`recoveryGrace(leaseId)`). Freshness over that window is read from the
+  oracle's own history (`IConversionOracleHistory`: round `updatedAt` for
+  Chainlink-style feeds, recording time for attested rates), never from a
+  timestamp a caller supplies. Because `G < maxOracleStaleness`, every grace
+  period completes: an outage delays default by at most its length plus `G`.
+
+An indexed lease with a tolerance must use an oracle that implements
+`IConversionOracleHistory`; `createLease` reverts with `OracleWithoutHistory`
+otherwise; the Chainlink and composed adapters also refuse, at deployment, a
+feed whose rounds cannot be read back (`NoRoundHistory`), even for leases
+that set no tolerance. The probe only reads the latest round, so it rejects
+feeds without `getRoundData` but cannot prove deeper history exists. A round with an
+invalid answer counts as an outage, since `pay()` reverts while it is the
+latest. Arrears and penalties keep accruing during an outage: the rule
+restricts default actions, it does not waive penalties.
+
+Costs and limits, on the lessor's side:
+
+- The history walk examines at most 256 observations and fails closed. If a
+  feed updates more than ~256 times within `G`, or the feed changes phase,
+  default stays blocked until enough history accumulates again (for a phase
+  change, `G`). Choose `maxOracleStaleness` with the feed's cadence in mind.
+- If the index never recovers (e.g. a retired feed), default stays blocked; the
+  oracle cannot be replaced after origination in this reference, so mutual
+  termination is the only exit. The spec asks implementations to document a
+  replacement path.
+- Gas: `declareDefault` with ~240 rounds in the grace window measured 547k gas
+  against the mock feed (warm storage, `test_H12`); expect more on a real,
+  proxied feed. With a 1-day feed and a tolerance of a few days the walk reads
+  a handful of rounds.
+- Release of the asset upon default (asset-bound extension) is subject to the
+  same rule in the spec; this reference does not implement asset release.
 
 | Case | Lessee can pay? | Default / termination possible? |
 | --- | --- | --- |
-| Index oracle stale past `maxOracleStaleness` | No (`StaleOracle`) | Yes |
-| Index recovers; default declared in the same block | Not in time | Yes |
-| Lessor position held by an address blacklisted by the payment token | No | Yes, and the holder can induce it |
-| Payment token paused by its issuer | No | Yes |
-| Chain downtime across a due date | Not in time | Yes, in the first block after resuming |
+| Index oracle stale past `maxOracleStaleness` | No (`StaleOracle`) | **No** (A) |
+| Index recovers; default attempted in the same block | Yes, within `G` | **Not before `G`** (B) |
+| Chain downtime longer than the tolerance, indexed lease | Yes, within `G` | **Not before `G`** (the feed's history shows the gap) |
+| Chain downtime, fixed-denomination lease (or shorter than the tolerance) | Not in time | Yes, in the first block after resuming — known issue |
+| Lessor position held by an address blacklisted by the payment token | No | Yes, and the holder can induce it — known issue; the spec recommends pull payments |
+| Payment token paused by its issuer | No | Yes — documented residual risk |
 
-These are under discussion in the
-[Magicians thread](https://ethereum-magicians.org/t/erc-8348-financial-lease/29076)
-and will be addressed in the next spec revision. To run the liveness invariant
-in enforcing mode: `LIVENESS_STRICT=true forge test --match-contract LivenessInvariantTest`.
+The liveness invariant checks rules A and B against an independent model in
+both directions (no default action while blocked, none rejected while allowed).
+Its token-side part only reports by default; to enforce it:
+`LIVENESS_STRICT=true forge test --match-contract LivenessInvariantTest`.
 
 ## Layout
 
@@ -72,10 +112,11 @@ in enforcing mode: `LIVENESS_STRICT=true forge test --match-contract LivenessInv
 | `src/IFinancialLeaseAnchored.sol`, `src/IFinancialLeaseAssetBound.sol` | Optional extensions |
 | `src/FinancialLease.sol` | Reference implementation |
 | `src/IConversionOracle.sol` | Oracle interface used by the implementation |
-| `src/oracles/` | Adapters: Chainlink feed, composed feeds, attested (manually published) rate |
+| `src/IConversionOracleHistory.sol` | Oracle freshness history, used by the liveness rule |
+| `src/oracles/` | Adapters: Chainlink feed, composed feeds, attested (manually published) rate; `FreshnessHistory` walks their history |
 | `src/MockUVAOracle.sol` | Test oracle |
 | `test/` | Unit, scenario, fuzz and invariant tests |
-| `test/liveness/` | Dependency-failure matrix and liveness invariant (documents known issues) |
+| `test/liveness/` | Dependency-failure matrix and liveness invariant |
 | `test/fork/` | Optional fork tests against live Chainlink feeds on Base (need `BASE_RPC_URL`) |
 | `script/DeployDemo.s.sol` | Base Sepolia demo deployment |
 
