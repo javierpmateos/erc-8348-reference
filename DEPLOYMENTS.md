@@ -7,15 +7,22 @@ leases, so you can read and pay real leases with `cast` without compiling
 anything. **Testnet only**: the payment token has a public `mint()` and the
 agreements are not real (`agreementHash = keccak256("DEMO — not a real agreement")`).
 
-> **Status: live.** Deployed on 2026-10-11 (20:14 UTC) with the UVA attested at
-> 2,150.53 ARS (BCRA value for 11/10/2026). The three contracts are
+> **Status: live.** Deployed on 2026-11-12 (03:21 UTC, block 57659117) from
+> commit `3b99d9f`, which includes the payment-path liveness rule
+> ([ethereum/ERCs#2140](https://github.com/ethereum/ERCs/pull/2140)). UVA
+> attested at 2,193.45 ARS (BCRA value for 12/11/2026). The three contracts are
 > source-verified on Blockscout.
+>
+> The previous deployment (2026-10-11, `FinancialLease` `0x63619da0…fEf53`) is
+> superseded: it predates the current interface ID and the liveness rule, and
+> its oracle went stale on 2026-11-10. It is left on-chain but no longer
+> maintained.
 
 | Contract | Address | Explorer |
 | --- | --- | --- |
-| `FinancialLease` | `0x63619da0eCf942eA756D35bBAFe206c1Fc8fEf53` | [verified source](https://base-sepolia.blockscout.com/address/0x63619da0eCf942eA756D35bBAFe206c1Fc8fEf53?tab=contract) |
-| `AttestedConversionOracle` (UVA → tARS) | `0x2925dbD907a5822948FdEb4502747f795229BdF8` | [verified source](https://base-sepolia.blockscout.com/address/0x2925dbD907a5822948FdEb4502747f795229BdF8?tab=contract) |
-| `MockStablecoin` (tARS, 6 decimals, public mint) | `0xfd43485fdE48fac755160206fAeF1f4284C8Fc49` | [verified source](https://base-sepolia.blockscout.com/address/0xfd43485fdE48fac755160206fAeF1f4284C8Fc49?tab=contract) |
+| `FinancialLease` | `0x1C9FEBF0332BA8DC334EE79Ed4f746BA494cb825` | [verified source](https://base-sepolia.blockscout.com/address/0x1C9FEBF0332BA8DC334EE79Ed4f746BA494cb825?tab=contract) |
+| `AttestedConversionOracle` (UVA → tARS) | `0xd31bc704745eC327B7f0E80375BA0cA9558021Af` | [verified source](https://base-sepolia.blockscout.com/address/0xd31bc704745eC327B7f0E80375BA0cA9558021Af?tab=contract) |
+| `MockStablecoin` (tARS, 6 decimals, public mint) | `0x09Da745BDa0bf5AE9e7B4cb5bA826674A112df3e` | [verified source](https://base-sepolia.blockscout.com/address/0x09Da745BDa0bf5AE9e7B4cb5bA826674A112df3e?tab=contract) |
 | Deployer = lessor = oracle owner and attester | `0x9B9f2D952ec5D7E1C2Aa962c4B06ee1D52E562d6` | [address](https://base-sepolia.blockscout.com/address/0x9B9f2D952ec5D7E1C2Aa962c4B06ee1D52E562d6) |
 | Lessee (all three leases) | `0x155b44f92eFC765913F129586E06035C8D16cAF0` | [address](https://base-sepolia.blockscout.com/address/0x155b44f92eFC765913F129586E06035C8D16cAF0) |
 
@@ -29,14 +36,15 @@ Common parameters: `jurisdiction = "AR"`, `terminationDelay = 30 days`,
 `maxOracleStaleness = 30 days`, "monthly" = every 30 days.
 
 Scales: units of account have 18 decimals (1 UVA = `1e18`); tARS has 6
-decimals; the oracle rate is tARS per UVA in tARS decimals (2,150.53 ARS/UVA =
-`2150530000`). Lease B has no oracle, so its units *are* tARS base units.
+decimals; the oracle rate is tARS per UVA in tARS decimals (2,193.45 ARS/UVA =
+`2193450000`). Lease B has no oracle, so its units *are* tARS base units.
 
-**Interface ID.** These contracts were deployed before the core interface was
-revised (`inputFreshness` moved into the core, `updateServicing` became
-implementation-defined). They answer `supportsInterface` for the previous core
-ID `0xe3e0ac48`, not for the current `0xf6b0f493`. The next redeploy will fix
-this; every function used below behaves the same.
+**Interface ID.** `supportsInterface` answers `true` for the current core ID
+`0xf6b0f493`:
+
+```sh
+cast call 0x1C9FEBF0332BA8DC334EE79Ed4f746BA494cb825 "supportsInterface(bytes4)(bool)" 0xf6b0f493 --rpc-url https://sepolia.base.org
+```
 
 ### ⚠️ The UVA oracle goes stale after 30 days — on purpose
 
@@ -44,7 +52,7 @@ The UVA has no on-chain feed, so the demo uses `AttestedConversionOracle`: the
 attester (the deployer) publishes the rate by hand. Leases 1 and 3 were created
 with `maxOracleStaleness = 30 days`, so **if nobody re-attests the UVA within 30
 days, `pay()` on leases 1 and 3 starts reverting with `StaleOracle()`**. The
-deploy-time attestation (2026-10-11 20:15 UTC) runs out on 2026-11-10 20:15 UTC.
+deploy-time attestation (2026-11-12 03:21 UTC) runs out on 2026-12-12 03:21 UTC.
 
 That is the correct behaviour of the standard, not a bug: a lease must not
 settle payments against an index observation older than its declared tolerance.
@@ -55,12 +63,16 @@ It is worth watching:
 - `inputFreshness(leaseId, INPUT_INDEX_OBSERVATION)` is how a consumer detects
   it: stale when `block.timestamp - observedAt > maxStaleness`;
 - lease 2 (no oracle) is never affected.
-- **Known issue:** while the index is stale, arrears and penalties keep
-  accruing and the lessor can still call `declareDefault` and, after the
-  timelock, `terminateForDefault`, even though the lessee cannot pay. This is
-  under discussion in the
-  [Magicians thread](https://ethereum-magicians.org/t/erc-8348-financial-lease/29076)
-  and will be addressed in the next spec revision.
+- **Payment-path liveness:** while the index is stale, `declareDefault` and
+  `terminateForDefault` revert with `PaymentPathUnavailable()`. After a
+  re-attestation they keep reverting with `RecoveryGraceActive()` until the
+  index has been continuously fresh for `recoveryGrace(leaseId)` = 15 days
+  (`maxOracleStaleness / 2`), so the lessee always gets a window to pay.
+  Arrears and penalties keep accruing meanwhile.
+- **Consequence for lease 3:** the oracle's history starts at deployment, so
+  `declareDefault(3)` reverts with `RecoveryGraceActive()` until 15 days after
+  it, i.e. from 2026-11-27 03:21 UTC, and only if the UVA has been re-attested
+  within every 30-day window since. That is the rule working, not a bug.
 
 Only the attester can fix it (see [Re-attesting the UVA](#re-attesting-the-uva)).
 
@@ -71,9 +83,9 @@ Requires [Foundry](https://book.getfoundry.sh/getting-started/installation)
 
 ```sh
 export RPC=https://sepolia.base.org
-export LEASE=0x63619da0eCf942eA756D35bBAFe206c1Fc8fEf53
-export ORACLE=0x2925dbD907a5822948FdEb4502747f795229BdF8
-export TARS=0xfd43485fdE48fac755160206fAeF1f4284C8Fc49
+export LEASE=0x1C9FEBF0332BA8DC334EE79Ed4f746BA494cb825
+export ORACLE=0xd31bc704745eC327B7f0E80375BA0cA9558021Af
+export TARS=0x09Da745BDa0bf5AE9e7B4cb5bA826674A112df3e
 ```
 
 ### Read the three leases
@@ -113,7 +125,7 @@ cast call $LEASE "conversionRateAsOf(uint256)(uint256,uint64)" 2 --rpc-url $RPC
 ### An overdue installment (lease 3)
 
 ```sh
-# (units, dueDate, paid) -> 3000000000000000000000, 1788725690, false
+# (units, dueDate, paid) -> 3000000000000000000000, 1791429682, false
 cast call $LEASE "paymentAt(uint256,uint256)(uint256,uint64,bool)" 3 0 --rpc-url $RPC
 ```
 
@@ -174,7 +186,7 @@ Attester only (the deployer's keystore account). Take the value published by the
 it to 6 decimals:
 
 ```sh
-cast send $ORACLE "attest(uint256)" $(cast parse-units 2150.53 6) \
+cast send $ORACLE "attest(uint256)" $(cast parse-units 2193.45 6) \
   --rpc-url $RPC --account demo-deployer
 ```
 
@@ -186,25 +198,25 @@ on the command line; `--sender` must be that account's address.
 
 ```sh
 export LESSEE=0x155b44f92eFC765913F129586E06035C8D16cAF0
-export UVA_RATE=2150.53               # ARS per UVA as published by the BCRA
-export ETHERSCAN_API_KEY=<key>        # only needed for --verify
+export UVA_RATE=2193.45               # ARS per UVA as published by the BCRA
 
 # dry run against a fork (sends nothing)
 forge script script/DeployDemo.s.sol --rpc-url https://sepolia.base.org \
   --account demo-deployer --sender 0x9B9f2D952ec5D7E1C2Aa962c4B06ee1D52E562d6
 
-# real thing
+# real thing (verifies on Blockscout, no API key needed)
 forge script script/DeployDemo.s.sol --rpc-url https://sepolia.base.org \
-  --account demo-deployer --sender 0x9B9f2D952ec5D7E1C2Aa962c4B06ee1D52E562d6 --broadcast --verify
+  --account demo-deployer --sender 0x9B9f2D952ec5D7E1C2Aa962c4B06ee1D52E562d6 \
+  --broadcast --verify --verifier blockscout --verifier-url https://base-sepolia.blockscout.com/api/
 ```
 
 - `UVA_RATE` accepts `2150.53` or `2150,53`, up to 6 decimals, no thousands
   separator.
-- `--verify` uses Etherscan's API V2, which serves Basescan: one
-  `ETHERSCAN_API_KEY` from <https://etherscan.io/apidashboard> works for
-  chain 84532 (the old Basescan-specific keys no longer do). To verify without
-  a key, use Blockscout instead:
-  `--verify --verifier blockscout --verifier-url https://base-sepolia.blockscout.com/api/`.
-  That is how the live deployment above was verified (after the fact, with
-  `forge verify-contract`).
+- The live deployment above was verified with exactly that command. To verify
+  on Basescan instead, drop the two `--verifier` flags and set
+  `ETHERSCAN_API_KEY` (Etherscan API V2; one key from
+  <https://etherscan.io/apidashboard> works for chain 84532).
+- forge's per-transaction "Contract:" labels in the broadcast log can be
+  mismatched; the addresses printed by the script's own logs are the
+  authoritative ones.
 - The script refuses to run on any chain other than 84532.
